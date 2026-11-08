@@ -1,93 +1,58 @@
+'use strict'
 module.exports = {
-    getCurrentProgramAndTimeElapsed: getCurrentProgramAndTimeElapsed,
-    createLineup: createLineup
+    getCurrentProgramAndTimeElapsed,
+    createLineup
 }
 
 function getCurrentProgramAndTimeElapsed(date, channel) {
-    let channelStartTime = new Date(channel.startTime)
-    if (channelStartTime > date)
-        throw new Error("startTime cannot be set in the future. something fucked up..")
-    let timeElapsed = (date.valueOf() - channelStartTime.valueOf()) % channel.duration
-    let currentProgramIndex = -1
-    for (let y = 0, l2 = channel.programs.length; y < l2; y++) {
-        let program = channel.programs[y]
-        if (timeElapsed - program.duration < 0) {
-            currentProgramIndex = y
-            break
-        } else {
-            timeElapsed -= program.duration
-        }
+    if (!Array.isArray(channel.programs) || !channel.programs.length) throw new Error('Channel has no programmes')
+    const cycle = Number(channel.duration)
+    const start = new Date(channel.startTime).getTime()
+    if (!Number.isFinite(start) || !Number.isFinite(cycle) || cycle <= 0 || start > date) throw new Error('Invalid channel start or duration')
+    let elapsed = (Number(date) - start) % cycle
+    for (let index = 0; index < channel.programs.length; index++) {
+        const duration = Number(channel.programs[index].duration)
+        if (!Number.isFinite(duration) || duration <= 0) throw new Error('Invalid programme duration')
+        if (elapsed < duration) return { program: channel.programs[index], timeElapsed: elapsed, programIndex: index }
+        elapsed -= duration
     }
-    if (currentProgramIndex === -1)
-        throw new Error("No program found; find algorithm fucked up")
-    return { program: channel.programs[currentProgramIndex], timeElapsed: timeElapsed, programIndex: currentProgramIndex }
+    throw new Error('Programme durations do not match channel cycle')
 }
 
-function createLineup(obj) {
-    let timeElapsed = obj.timeElapsed
-    let activeProgram = obj.program
-    let lineup = []
-    let programStartTimes = [0, activeProgram.actualDuration * .25, activeProgram.actualDuration * .50, activeProgram.actualDuration * .75, activeProgram.actualDuration]
-    let commercials = [[], [], [], [], []]
-    for (let i = 0, l = activeProgram.commercials.length; i < l; i++) // Sort the commercials into their own commerical "slot" array
-        commercials[activeProgram.commercials[i].commercialPosition].push(activeProgram.commercials[i])
-
-    let foundFirstVideo = false
-    let progTimeElapsed = 0
-    for (let i = 0, l = commercials.length; i < l; i++) { // Foreach commercial slot
-        for (let y = 0, l2 = commercials[i].length; y < l2; y++) {  // Foreach commercial in that slot
-            if (!foundFirstVideo && timeElapsed - commercials[i][y].duration < 0) { // If havent already found the starting video AND the this is a the starting video
-                foundFirstVideo = true // We found the fucker
-                lineup.push({
-                    type: 'commercial',
-                    file: commercials[i][y].file,
-                    streams: commercials[i][y].streams,
-                    start: timeElapsed, // start time will be the time elapsed, cause this is the first video
-                    duration: commercials[i][y].duration - timeElapsed, // duration set accordingly
-                    opts: commercials[i][y].opts
-                })
-            } else if (foundFirstVideo) {   // Otherwise, if weve already found the starting video
-                lineup.push({   // just add the video, starting at 0, playing the entire duration
-                    type: 'commercial',
-                    file: commercials[i][y].file,
-                    streams: commercials[i][y].streams,
-                    start: 0,
-                    duration: commercials[i][y].duration,
-                    opts: commercials[i][y].opts
-                })
-            } else {    // Otherwise, this bitch has already been played.. Reduce the time elapsed by its duration
-                timeElapsed -= commercials[i][y].duration
-            }
-        }
-        if (i < l - 1) { // The last commercial slot is END, so dont write a program..
-            if (!foundFirstVideo && timeElapsed - (programStartTimes[i + 1] - programStartTimes[i]) < 0) { // same shit as above..
-                foundFirstVideo = true
-                lineup.push({
-                    type: 'program',
-                    file: activeProgram.file,
-                    streams: activeProgram.streams,
-                    start: progTimeElapsed + timeElapsed, // add the duration of already played program chunks to the timeElapsed
-                    duration: (programStartTimes[i + 1] - programStartTimes[i]) - timeElapsed,
-                    opts: activeProgram.opts
-                })
-            } else if (foundFirstVideo) {
-                if (lineup[lineup.length - 1].type === 'program') { // merge consecutive programs..
-                    lineup[lineup.length - 1].duration += (programStartTimes[i + 1] - programStartTimes[i])
-                } else {
-                    lineup.push({
-                        type: 'program',
-                        file: activeProgram.file,
-                        streams: activeProgram.streams,
-                        start: programStartTimes[i],
-                        duration: (programStartTimes[i + 1] - programStartTimes[i]),
-                        opts: activeProgram.opts
-                    })
-                }
-            } else {
-                timeElapsed -= (programStartTimes[i + 1] - programStartTimes[i])
-                progTimeElapsed += (programStartTimes[i + 1] - programStartTimes[i]) // add the duration of already played program chunks together
-            }
+// Existing commercial scheduling remains supported, without forcing commercials
+// or requiring the adverts array to be present in imported Plex metadata.
+function createLineup({ program, timeElapsed }) {
+    if (!program || !program.file) throw new Error('Missing Plex media URL')
+    const mediaDuration = Number(program.actualDuration)
+    if (!(mediaDuration > 0)) throw new Error('Invalid programme media duration')
+    const slots = [[], [], [], [], []]
+    for (const item of program.commercials || []) {
+        if (!Number.isInteger(item.commercialPosition) || item.commercialPosition < 0 || item.commercialPosition > 4) continue
+        slots[item.commercialPosition].push(item)
+    }
+    const pieces = []
+    const add = (source, type, start, duration) => {
+        if (duration > 0) pieces.push({ type, file: source.file, streams: source.streams || [], start, duration, opts: source.opts || {} })
+    }
+    for (let i = 0; i < 5; i++) {
+        for (const commercial of slots[i]) add(commercial, 'commercial', 0, Number(commercial.duration))
+        if (i < 4) {
+            const begin = mediaDuration * i / 4
+            add(program, 'program', begin, mediaDuration * (i + 1) / 4 - begin)
         }
     }
-    return lineup
+    let position = Math.max(0, Number(timeElapsed) || 0)
+    const current = []
+    for (const piece of pieces) {
+        if (position >= piece.duration) { position -= piece.duration; continue }
+        const adjusted = { ...piece, start: piece.start + position, duration: piece.duration - position }
+        position = 0
+        // Merge consecutive parts of the same original video: avoids artificial
+        // FFmpeg process boundaries at 25/50/75% of each feature.
+        const previous = current[current.length - 1]
+        if (previous && previous.type === adjusted.type && previous.file === adjusted.file &&
+            Math.abs(previous.start + previous.duration - adjusted.start) < 1) previous.duration += adjusted.duration
+        else current.push(adjusted)
+    }
+    return current
 }

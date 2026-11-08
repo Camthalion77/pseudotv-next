@@ -1,96 +1,107 @@
-const { spawn } = require('child_process')
-const { EventEmitter } = require('events')
+'use strict'
+const { spawn } = require('node:child_process')
+const { EventEmitter } = require('node:events')
+const { MpegTsJoiner } = require('./mpegts')
 
-// MPEG-TS remuxer. Video and audio are never decoded or re-encoded.
-// Keep the public event interface used by src/video.js and HDHomeRun streams.
+// Each active viewer receives the channel's current programme, direct-copy only.
+// The joiner keeps transport continuity across separate FFmpeg muxing sessions.
 class FFMPEG extends EventEmitter {
     constructor(opts, channel) {
         super()
-        this.opts = opts
+        this.opts = opts || {}
         this.channel = channel
         this.ffmpegPath = opts.ffmpegPath
-        this.offset = 0
+        this.ts = new MpegTsJoiner()
         this.ffmpeg = null
         this.stopped = false
     }
 
     selectTrack(item, type, preference) {
         const streams = Array.isArray(item.streams) ? item.streams : []
-        const candidates = streams.map((stream, position) => ({ stream, position }))
-            .filter(({ stream }) => stream.streamType === type)
-        const selectedPosition = Number(preference)
-        const preferred = preference !== undefined && preference !== null &&
-            String(preference) !== '-1' && String(preference) !== '-2'
-            ? candidates.find(({ position, stream }) => position === selectedPosition || Number(stream.index) === selectedPosition)
+        const candidates = streams.map((stream, position) => ({ stream, position })).filter(({ stream }) => Number(stream.streamType) === type)
+        const prefer = String(preference)
+        const preferred = preference !== undefined && preference !== null && prefer !== '-1' && prefer !== '-2'
+            ? candidates.find(({ position, stream }) => position === Number(preference) || Number(stream.index) === Number(preference))
             : null
-        const match = preferred || candidates.find(({ stream }) => stream.selected || stream.default) || candidates[0]
-        if (match) {
-            // Plex stream.index is the absolute FFmpeg stream index when available.
-            const index = Number(match.stream.index ?? match.position)
-            if (Number.isInteger(index) && index >= 0) return `0:${index}`
-        }
+        const chosen = preferred || candidates.find(({ stream }) => stream.selected || stream.default) || candidates[0]
+        if (chosen && Number.isInteger(Number(chosen.stream.index)) && Number(chosen.stream.index) >= 0)
+            return `0:${chosen.stream.index}`
+        // Fallback by stream type when Plex index is absent (never guess an absolute index).
         return type === 1 ? '0:v:0' : '0:a:0?'
     }
 
     spawn(item) {
         if (this.stopped) return
-        if (!item || !item.file || !Number.isFinite(Number(item.duration)) || Number(item.duration) <= 0) {
-            this.emit('error', { message: 'Invalid media item or duration' })
+        if (!item || typeof item.file !== 'string' || !item.file ||
+            !Number.isFinite(Number(item.duration)) || Number(item.duration) <= 0 ||
+            !Number.isFinite(Number(item.start)) || Number(item.start) < 0) {
+            this.emit('error', { message: 'Invalid Plex media URL or programme timing' })
             return
         }
-        const options = item.opts || {}
-        const start = Math.max(0, Number(item.start) || 0) / 1000
-        const duration = Number(item.duration) / 1000
-        const videoMap = this.selectTrack(item, 1, options.videoIndex)
-        const audioMap = this.selectTrack(item, 2, options.audioIndex)
+        if (this.ffmpeg) {
+            this.emit('error', { message: 'Attempted overlapping FFmpeg sessions' })
+            return
+        }
+        const opts = item.opts || {}
         const args = [
             '-hide_banner', '-nostdin', '-loglevel', 'error',
-            '-ss', String(start), '-re', '-i', item.file,
-            '-t', String(duration),
-            '-map', videoMap, '-map', audioMap,
-            '-c:v', 'copy', '-c:a', 'copy',
-            '-sn', '-dn',
-            '-metadata', 'service_provider=PseudoTV',
+            '-ss', String(Number(item.start) / 1000), '-re', '-i', item.file,
+            '-t', String(Number(item.duration) / 1000),
+            '-map', this.selectTrack(item, 1, opts.videoIndex),
+            '-map', this.selectTrack(item, 2, opts.audioIndex),
+            '-c:v', 'copy', '-c:a', 'copy', '-sn', '-dn',
+            '-metadata', 'service_provider=PseudoTV Next',
             '-metadata', `service_name=${this.channel.name}`,
-            // Reannounce programme tables and flag a new segment for MPEG-TS receivers.
-            '-mpegts_flags', '+resend_headers+initial_discontinuity',
             '-mpegts_service_id', String(Math.max(1, Math.min(65535, Number(this.channel.number) || 1))),
-            // Keep elementary stream PIDs predictable between programmes.
-            '-mpegts_start_pid', '256',
-            '-mpegts_pmt_start_pid', '4096',
-            // Refresh programme signalling frequently for receivers joining mid-stream.
-            '-pat_period', '0.1',
-            '-sdt_period', '0.5',
-            '-muxdelay', '0',
-            '-muxpreload', '0',
-            '-f', 'mpegts',
-            '-output_ts_offset', String(this.offset),
-            'pipe:1'
+            '-mpegts_start_pid', '256', '-mpegts_pmt_start_pid', '4096',
+            '-mpegts_flags', '+resend_headers', '-pat_period', '0.1', '-sdt_period', '0.5',
+            '-muxdelay', '0', '-muxpreload', '0', '-f', 'mpegts', 'pipe:1'
         ]
-        this.offset += duration
+        this.ts.beginSegment()
         const child = spawn(this.ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
         this.ffmpeg = child
-        let errorDetails = ''
-        child.stdout.on('data', chunk => this.emit('data', chunk))
+        let failure = false
+        let stderr = ''
+        child.stdout.on('data', chunk => {
+            if (this.stopped || failure) return
+            try {
+                const result = this.ts.feed(chunk)
+                if (result.length) this.emit('data', result)
+            } catch (e) {
+                failure = true
+                this.emit('error', { message: e.message })
+                child.kill()
+            }
+        })
         child.stderr.on('data', chunk => {
+            stderr = (stderr + chunk.toString()).slice(-4096)
             if (this.opts.logFfmpeg) process.stderr.write(chunk)
-            errorDetails = (errorDetails + chunk.toString()).slice(-2048)
         })
-        child.on('error', err => {
-            this.emit('error', { message: err.message })
+        child.once('error', err => {
+            if (!failure && !this.stopped) {
+                failure = true
+                this.emit('error', { message: err.message })
+            }
         })
-        child.on('close', code => {
+        child.once('close', code => {
             if (this.ffmpeg === child) this.ffmpeg = null
-            if (this.stopped || code === null || code === 255) this.emit('close', code)
-            else if (code === 0) this.emit('end')
-            else this.emit('error', { code, message: errorDetails.trim() || 'FFmpeg remux failed' })
+            if (this.stopped || failure) { this.emit('close', code); return }
+            if (code !== 0) {
+                this.emit('error', { code, message: stderr.trim().replace(/X-Plex-Token=[^\s&]+/g, 'X-Plex-Token=REDACTED') || 'MPEG-TS remux failed' })
+                return
+            }
+            try {
+                const tail = this.ts.endSegment()
+                if (tail.length) this.emit('data', tail)
+                this.emit('end')
+            } catch (err) { this.emit('error', { message: err.message }) }
         })
     }
-
+    pause() { if (this.ffmpeg && this.ffmpeg.stdout) this.ffmpeg.stdout.pause() }
+    resume() { if (this.ffmpeg && this.ffmpeg.stdout) this.ffmpeg.stdout.resume() }
     kill() {
         this.stopped = true
         if (this.ffmpeg && !this.ffmpeg.killed) this.ffmpeg.kill()
     }
 }
-
 module.exports = FFMPEG

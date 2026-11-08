@@ -1,13 +1,11 @@
-FROM node:12.16
-RUN apt-get -y update && \
-    apt-get -y upgrade && \
-    apt-get install -y ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
+FROM node:22-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /home/node/app
 COPY package*.json ./
-RUN npm install
+RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm install -g browserify
 RUN npm run build
+ENV PORT=8000 DATABASE=/data HDHR_DISCOVERY=false
 EXPOSE 8000
-CMD [ "npm", "start"]
+CMD ["node", "index.js"]

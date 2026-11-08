@@ -1,80 +1,90 @@
+'use strict'
 const express = require('express')
-const helperFuncs = require('./helperFuncs')
-const FFMPEG = require('./ffmpeg')
-const FFMPEG_TEXT = require('./ffmpegText')
 const fs = require('fs')
+const helper = require('./helperFuncs')
+const FFMPEG = require('./ffmpeg')
 
 module.exports = { router: video }
 
 function video(db) {
     const router = express.Router()
 
-    // Keep the original setup stream and HDHomeRun endpoint contract.
-    router.get('/setup', (req, res) => {
+    function serveChannel(req, res, channel) {
         const settings = db['ffmpeg-settings'].find()[0]
-        if (!fs.existsSync(settings.ffmpegPath)) return res.status(500).send('FFmpeg not found')
-        const ffmpeg = new FFMPEG_TEXT(settings, 'PseudoTV (No Channels Configured)', 'Configure your channels using the PseudoTV Web UI')
-        let closed = false
-        ffmpeg.on('data', chunk => { if (!closed && !res.destroyed) res.write(chunk) })
-        ffmpeg.on('error', err => {
-            console.error('Setup FFmpeg error', err)
-            if (!res.headersSent) res.status(500).end('Setup stream failed')
-            else res.destroy()
-        })
-        ffmpeg.on('close', () => { if (!res.writableEnded) res.end() })
-        res.on('close', () => { closed = true; ffmpeg.kill() })
-    })
-
-    router.get('/video', (req, res) => {
-        const number = Number(req.query.channel)
-        if (!Number.isInteger(number) || number <= 0) return res.status(400).send('Invalid channel')
-        const channel = db['channels'].find({ number })[0]
-        if (!channel) return res.status(404).send('Channel not found')
-        const settings = db['ffmpeg-settings'].find()[0]
-        if (!settings || !fs.existsSync(settings.ffmpegPath)) return res.status(500).send('FFmpeg not found')
+        if (!settings || !fs.existsSync(settings.ffmpegPath)) return res.status(500).send('FFmpeg executable unavailable')
+        if (!channel.programs || !channel.programs.length) return res.status(422).send('Channel has no programmes')
 
         let prog, lineup
         try {
-            prog = helperFuncs.getCurrentProgramAndTimeElapsed(Date.now(), channel)
-            lineup = helperFuncs.createLineup(prog)
-            if (!lineup.length) throw new Error('Empty channel lineup')
+            prog = helper.getCurrentProgramAndTimeElapsed(Date.now(), channel)
+            lineup = helper.createLineup(prog)
+            if (!lineup.length) throw new Error('Empty lineup')
         } catch (err) {
-            console.error('Invalid channel schedule', err)
+            console.error('Channel schedule error:', err.message)
             return res.status(422).send('Invalid channel schedule')
         }
 
-        res.setHeader('Content-Type', 'video/mp2t')
-        res.setHeader('Cache-Control', 'no-store')
-        const ffmpeg = new FFMPEG(settings, channel)
+        const remux = new FFMPEG(settings, channel)
         let closed = false
-        ffmpeg.on('data', chunk => {
-            if (!closed && !res.destroyed) res.write(chunk)
-        })
-        ffmpeg.on('error', err => {
-            console.error(`Channel ${number} remux error`, err)
-            if (!res.headersSent) res.status(502).end('Media cannot be remuxed as MPEG-TS')
-            else res.destroy()
-            ffmpeg.kill()
-        })
-        ffmpeg.on('close', () => {
-            if (!res.writableEnded) res.end()
-        })
-        ffmpeg.on('end', () => {
+        let advanceScheduled = false
+        res.setHeader('Content-Type', 'video/mp2t')
+        res.setHeader('Cache-Control', 'no-store, no-transform')
+        res.setHeader('X-Accel-Buffering', 'no')
+
+        const close = () => {
             if (closed) return
-            if (lineup.length === 0) {
+            closed = true
+            remux.kill()
+        }
+        const fail = err => {
+            if (closed) return
+            console.error(`PseudoTV channel ${channel.number}:`, err.message || err.code || err)
+            if (!res.headersSent) res.status(502).end('Direct stream unavailable or codec unsupported in MPEG-TS')
+            else res.destroy()
+            close()
+        }
+        const advance = () => {
+            if (closed || advanceScheduled) return
+            advanceScheduled = true
+            setImmediate(() => {
+                advanceScheduled = false
+                if (closed) return
                 try {
-                    prog = helperFuncs.getCurrentProgramAndTimeElapsed(Date.now(), channel)
-                    lineup = helperFuncs.createLineup(prog)
-                    if (!lineup.length) throw new Error('Empty channel lineup')
-                } catch (err) {
-                    console.error(`Channel ${number} schedule error`, err)
-                    return res.destroy()
-                }
-            }
-            ffmpeg.spawn(lineup.shift())
+                    if (!lineup.length) {
+                        // Advance deterministically; don't rediscover the outgoing item
+                        // from the wall clock at a slightly early FFmpeg EOF.
+                        const nextIndex = (prog.programIndex + 1) % channel.programs.length
+                        prog = { programIndex: nextIndex, program: channel.programs[nextIndex], timeElapsed: 0 }
+                        lineup = helper.createLineup(prog)
+                        if (!lineup.length) throw new Error('Empty next programme')
+                    }
+                    remux.spawn(lineup.shift())
+                } catch (err) { fail(err) }
+            })
+        }
+        remux.on('data', chunk => {
+            if (!closed && !res.destroyed && !res.write(chunk)) remux.pause()
         })
-        res.on('close', () => { closed = true; ffmpeg.kill() })
-        ffmpeg.spawn(lineup.shift())
+        res.on('drain', () => remux.resume())
+        remux.on('error', fail)
+        remux.on('end', advance)
+        remux.on('close', () => {
+            if (!closed && !res.writableEnded) { res.end(); close() }
+        })
+        req.on('aborted', close)
+        res.on('close', close)
+        advance()
+    }
+
+    // No channel configured: return a diagnostic HTTP response instead of generating
+    // synthetic H264/MPEG2 video (strict Direct Stream mode has no synthetic encoder).
+    router.get('/setup', (_req, res) => res.status(503).type('text/plain').send('Configure at least one Plex channel in PseudoTV Next'))
+    router.get('/video', (req, res) => {
+        const number = Number(req.query.channel)
+        if (!Number.isInteger(number) || number < 1 || number > 65535) return res.status(400).send('Invalid channel')
+        const channel = db['channels'].find({ number })[0]
+        if (!channel) return res.status(404).send('Channel not found')
+        return serveChannel(req, res, channel)
     })
     return router
 }

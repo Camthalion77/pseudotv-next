@@ -1,0 +1,17 @@
+# Separate test instance. Do not reuse the production PseudoTV database volume.
+# Host networking makes HDHomeRun SSDP discovery possible when explicitly enabled.
+services:
+  pseudotv-next:
+    build: .
+    container_name: pseudotv-next-test
+    network_mode: host
+    environment:
+      PORT: "8098"
+      DATABASE: /data
+      HDHR_DISCOVERY: "false"
+      TZ: Europe/Athens
+    volumes:
+      - ./pseudotv-next-data:/data
+    restart: unless-stopped
+    x-casaos:
+      icon: https://raw.githubusercontent.com/Camthalion77/pseudotv-next/development/resources/pseudotv.png

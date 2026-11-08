@@ -1,24 +1,21 @@
-name: PseudoTV Code Check
-
+name: PseudoTV Direct Stream Checks
 on:
   push:
     branches: [main, development]
   pull_request:
-
 jobs:
-  syntax-and-remux:
+  direct-stream:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install FFmpeg and FFprobe
+      - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Check JavaScript syntax
+      - name: Syntax checks
         run: |
-          find src -name '*.js' -exec node --check {} \;
+          find src tests -name '*.js' -exec node --check {} \;
           node --check index.js
-          node --check tests/direct-stream.test.js
-      - name: Verify consecutive MPEG-TS programme segments
-        run: node --test tests/direct-stream.test.js
+      - name: Direct Stream tests
+        run: node --test tests/*.test.js
