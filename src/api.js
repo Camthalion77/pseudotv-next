@@ -6,6 +6,29 @@ module.exports = { router: api }
 function api(db, xmltvInterval) {
     let router = express.Router()
 
+    // Verify Plex after OAuth server-side: avoids browser CORS / ZeroTier routing issues.
+    router.post('/api/plex-verify', async (req, res) => {
+        const { protocol, host, port, token } = req.body || {}
+        if (!['http', 'https'].includes(protocol) ||
+            typeof host !== 'string' || !/^[a-zA-Z0-9.:-]+$/.test(host) ||
+            !Number.isInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535 ||
+            typeof token !== 'string' || !token.length) {
+            return res.status(400).json({ error: 'Invalid Plex server configuration' })
+        }
+        try {
+            const Plex = require('./plex')
+            const plex = new Plex({ protocol, host, port, token })
+            const info = await Promise.race([
+                plex.Get('/'),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Plex server timed out')), 12000))
+            ])
+            return res.json({ name: info.friendlyName || 'Plex Media Server' })
+        } catch (error) {
+            // Do not expose server tokens, credential-bearing URLs or internal errors.
+            return res.status(502).json({ error: 'Cannot access Plex server from PseudoTV Next. Check host, port and Plex availability.' })
+        }
+    })
+
     // Plex Servers
     router.get('/api/plex-servers', (req, res) => {
         let servers = db['plex-servers'].find()

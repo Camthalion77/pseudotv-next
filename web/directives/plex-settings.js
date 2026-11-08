@@ -32,13 +32,13 @@ module.exports = function (plex, pseudotv, $timeout) {
                         p.name = result.name
                         return pseudotv.addPlexServer(p)
                     }).then((servers) => {
-                        scope.$apply(() => {
+                        $timeout(() => {
                             scope.servers = servers
                             scope.isProcessing = false
                             scope.visible = false
                         })
                     }, (err) => {
-                        scope.$apply(() => {
+                        $timeout(() => {
                             scope.isProcessing = false
                             scope.error = err
                             $timeout(() => {

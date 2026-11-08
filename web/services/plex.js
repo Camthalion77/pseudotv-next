@@ -2,61 +2,64 @@ const Plex = require('../../src/plex')
 module.exports = function ($http, $window, $interval) {
     return {
         login: async (plex) => {
-            var client = new Plex({ protocol: plex.protocol, host: plex.host, port: plex.port })
-            //const res = await client.SignIn(plex.username, plex.password)
+            const headers = {
+                'Accept': 'application/json',
+                'X-Plex-Product': 'PseudoTV Next',
+                'X-Plex-Version': '1.0',
+                'X-Plex-Client-Identifier': 'rg14zekk3pa5zp4safjwaa8z',
+                'X-Plex-Model': 'PseudoTV Next'
+            }
+            const pinResponse = await $http({
+                method: 'POST',
+                url: 'https://plex.tv/api/v2/pins?strong=true',
+                headers
+            })
+            const pin = pinResponse.data
+            if (!pin || !pin.id || !pin.code) throw new Error('Plex did not return an authorization code')
+            const authURL = 'https://app.plex.tv/auth/#!?clientID=rg14zekk3pa5zp4safjwaa8z' +
+                '&context[device][version]=1.0&context[device][model]=PseudoTV%20Next' +
+                '&context[device][product]=PseudoTV%20Next&code=' + encodeURIComponent(pin.code)
+            const popup = $window.open(authURL, '_blank')
+            if (!popup) throw new Error('Allow popups to authorize your Plex account')
             return new Promise((resolve, reject) => {
-                $http({
-                    method: 'POST',
-                    url: 'https://plex.tv/api/v2/pins?strong=true',
-                    headers: {
-                        'Accept': 'application/json',
-                        'X-Plex-Product': 'PseudoTV',
-                        'X-Plex-Version': 'Plex OAuth',
-                        'X-Plex-Client-Identifier': 'rg14zekk3pa5zp4safjwaa8z',
-                        'X-Plex-Model': 'Plex OAuth'
-                    }
-                }).then((res) => {
-                    $window.open('https://app.plex.tv/auth/#!?clientID=rg14zekk3pa5zp4safjwaa8z&context[device][version]=Plex OAuth&context[device][model]=Plex OAuth&code=' + res.data.code + '&context[device][product]=Plex Web')
-                    let limit = 120000 // 2 minute time out limit
-                    let poll = 2000 // check every 2 seconds for token
-                    let interval = $interval(() => {
-                        $http({
+                let busy = false
+                let settled = false
+                const finish = (error, result) => {
+                    if (settled) return
+                    settled = true
+                    $interval.cancel(polling)
+                    $interval.cancel(timeout)
+                    if (error) reject(error)
+                    else resolve(result)
+                }
+                const polling = $interval(async () => {
+                    if (busy || settled) return
+                    busy = true
+                    try {
+                        const status = await $http({
                             method: 'GET',
-                            url: `https://plex.tv/api/v2/pins/${res.data.id}`,
-                            headers: {
-                                'Accept': 'application/json',
-                                'X-Plex-Product': 'PseudoTV',
-                                'X-Plex-Version': 'Plex OAuth',
-                                'X-Plex-Client-Identifier': 'rg14zekk3pa5zp4safjwaa8z',
-                                'X-Plex-Model': 'Plex OAuth'
-                            }
-                        }).then(async (r2) => {
-                            limit -= poll
-                            if (limit <= 0) {
-                                $interval.cancel(interval)
-                                reject('Timed Out. Failed to sign in a timely manner (2 mins)')
-                            }
-                            if (r2.data.authToken !== null) {
-                                $interval.cancel(interval)
-                                client._token = r2.data.authToken
-                                try { 
-                                    const _res = await client.Get('/')
-                                    res.name = _res.friendlyName
-                                    res.token = client._token
-                                    resolve(res)
-                                } catch (err) {
-                                    reject(err)
-                                }
-                            }
-                        }, (err) => {
-                            $interval.cancel(interval)
-                            reject(err)
+                            url: `https://plex.tv/api/v2/pins/${pin.id}`,
+                            headers
                         })
-                        
-                    }, poll)
-                }, (err) => {
-                    reject(err)
-                })
+                        const token = status.data && status.data.authToken
+                        if (typeof token === 'string' && token.length) {
+                            const checked = await $http.post('/api/plex-verify', {
+                                protocol: plex.protocol,
+                                host: plex.host,
+                                port: plex.port,
+                                token
+                            })
+                            finish(null, { token, name: checked.data.name })
+                        }
+                    } catch (err) {
+                        const serverError = err && err.data && err.data.error
+                        if (serverError) finish(new Error(serverError))
+                        else if (err.status && err.status !== 404) finish(new Error('Plex authentication failed; check the browser console'))
+                    } finally {
+                        busy = false
+                    }
+                }, 2000)
+                const timeout = $interval(() => finish(new Error('Plex sign-in timed out (2 minutes)')), 120000, 1)
             })
         },
         getLibrary: async (server) => {
