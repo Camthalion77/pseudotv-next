@@ -55,6 +55,14 @@ class FFMPEG extends EventEmitter {
             // Reannounce programme tables and flag a new segment for MPEG-TS receivers.
             '-mpegts_flags', '+resend_headers+initial_discontinuity',
             '-mpegts_service_id', String(Math.max(1, Math.min(65535, Number(this.channel.number) || 1))),
+            // Keep elementary stream PIDs predictable between programmes.
+            '-mpegts_start_pid', '256',
+            '-mpegts_pmt_start_pid', '4096',
+            // Refresh programme signalling frequently for receivers joining mid-stream.
+            '-pat_period', '0.1',
+            '-sdt_period', '0.5',
+            '-muxdelay', '0',
+            '-muxpreload', '0',
             '-f', 'mpegts',
             '-output_ts_offset', String(this.offset),
             'pipe:1'

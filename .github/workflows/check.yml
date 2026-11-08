@@ -6,14 +6,19 @@ on:
   pull_request:
 
 jobs:
-  syntax:
+  syntax-and-remux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install FFmpeg and FFprobe
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Check JavaScript syntax
         run: |
           find src -name '*.js' -exec node --check {} \;
           node --check index.js
+          node --check tests/direct-stream.test.js
+      - name: Verify consecutive MPEG-TS programme segments
+        run: node --test tests/direct-stream.test.js
