@@ -29,6 +29,67 @@ function api(db, xmltvInterval) {
         }
     })
 
+    // Read Plex metadata server-side; the remote ZeroTier browser never calls Plex directly.
+    const resolvePlex = (req, res) => {
+        const server = db['plex-servers'].find({ _id: req.params.id })[0]
+        if (!server) { res.status(404).json({ error: 'Plex server not configured' }); return null }
+        return server
+    }
+    const safePlexPath = value => typeof value === 'string' &&
+        value.length <= 4096 && /^\/(?:library\/(?:sections|metadata)|playlists)(?:\/|$|\?)/.test(value) &&
+        !/[\\\r\n]/.test(value) && !value.includes('://') && !value.includes('..')
+
+    router.get('/api/plex-library/:id', async (req, res) => {
+        const server = resolvePlex(req, res)
+        if (!server) return
+        const plexPath = req.query.path
+        if (!safePlexPath(plexPath)) return res.status(400).json({ error: 'Invalid Plex library path' })
+        try {
+            const Plex = require('./plex')
+            const result = await Promise.race([
+                new Plex(server).Get(plexPath),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000))
+            ])
+            res.json(result)
+        } catch (err) {
+            res.status(502).json({ error: 'Cannot load Plex library. Verify Plex connectivity and account permissions.' })
+        }
+    })
+
+    router.get('/api/plex-art/:id', (req, res) => {
+        const server = resolvePlex(req, res)
+        if (!server) return
+        const imagePath = req.query.path
+        if (typeof imagePath !== 'string' || imagePath.length > 4096 ||
+            !/^\/(?:library|photo)(?:\/|$)/.test(imagePath) ||
+            /[\\\r\n]/.test(imagePath) || imagePath.includes('://') || imagePath.includes('..')) {
+            return res.status(400).end()
+        }
+        // Only the saved Plex server is contacted; never accept arbitrary target URLs.
+        const request = require('request')
+        const base = `${server.protocol}://${server.host}:${server.port}`
+        let parsed
+        try { parsed = new URL(imagePath, base) } catch (_) { return res.status(400).end() }
+        parsed.searchParams.delete('X-Plex-Token')
+        const upstream = request.get({
+            url: base + parsed.pathname + parsed.search,
+            headers: { 'X-Plex-Token': server.token, 'Accept': 'image/*' },
+            timeout: 10000
+        })
+        upstream.on('response', response => {
+            if (response.statusCode !== 200 || !/^image\//i.test(response.headers['content-type'] || '')) {
+                upstream.abort()
+                if (!res.headersSent) res.status(502).end()
+                return
+            }
+            res.setHeader('Content-Type', response.headers['content-type'])
+            res.setHeader('Cache-Control', 'private, max-age=3600')
+            upstream.pipe(res)
+        })
+        upstream.on('error', () => { if (!res.headersSent) res.status(502).end() })
+        res.on('close', () => upstream.abort())
+    })
+
     // Plex Servers
     router.get('/api/plex-servers', (req, res) => {
         let servers = db['plex-servers'].find()

@@ -1,5 +1,13 @@
 const Plex = require('../../src/plex')
 module.exports = function ($http, $window, $interval) {
+    const proxiedPlex = server => ({
+        Get: path => $http.get('/api/plex-library/' + encodeURIComponent(server._id), {
+            params: { path }, timeout: 20000
+        }).then(response => response.data)
+    })
+    const plexArt = (server, imagePath) => imagePath
+        ? '/api/plex-art/' + encodeURIComponent(server._id) + '?path=' + encodeURIComponent(imagePath)
+        : ''
     return {
         login: async (plex) => {
             const headers = {
@@ -63,7 +71,7 @@ module.exports = function ($http, $window, $interval) {
             })
         },
         getLibrary: async (server) => {
-            var client = new Plex(server)
+            var client = proxiedPlex(server)
             const res = await client.Get('/library/sections')
             var sections = []
             for (let i = 0, l = typeof res.Directory !== 'undefined' ? res.Directory.length : 0; i < l; i++)
@@ -71,13 +79,13 @@ module.exports = function ($http, $window, $interval) {
                     sections.push({
                         title: res.Directory[i].title,
                         key: `/library/sections/${res.Directory[i].key}/all`,
-                        icon: `${server.protocol}://${server.host}:${server.port}${res.Directory[i].composite}?X-Plex-Token=${server.token}`,
+                        icon: plexArt(server, res.Directory[i].composite),
                         type: res.Directory[i].type
                     })
             return sections
         },
         getPlaylists: async (server) => {
-            var client = new Plex(server)
+            var client = proxiedPlex(server)
             const res = await client.Get('/playlists')
             var playlists = []
             for (let i = 0, l = typeof res.Metadata !== 'undefined' ? res.Metadata.length : 0; i < l; i++)
@@ -85,13 +93,13 @@ module.exports = function ($http, $window, $interval) {
                     playlists.push({
                         title: res.Metadata[i].title,
                         key: res.Metadata[i].key,
-                        icon: `${server.protocol}://${server.host}:${server.port}${res.Metadata[i].composite}?X-Plex-Token=${server.token}`,
+                        icon: plexArt(server, res.Metadata[i].composite),
                         duration: res.Metadata[i].duration
                     })
             return playlists
         },
         getStreams: async (server, key) => {
-            var client = new Plex(server)
+            var client = proxiedPlex(server)
             return client.Get(key).then((res) => { 
                 let streams =  res.Metadata[0].Media[0].Part[0].Stream
                 for (let i = 0, l = streams.length; i < l; i++) {
@@ -103,7 +111,7 @@ module.exports = function ($http, $window, $interval) {
             })
         },
         getNested: async (server, key) => {
-            var client = new Plex(server)
+            var client = proxiedPlex(server)
             const res = await client.Get(key)
             var nested = []
             for (let i = 0, l = typeof res.Metadata !== 'undefined' ? res.Metadata.length : 0; i < l; i++) {
@@ -116,7 +124,7 @@ module.exports = function ($http, $window, $interval) {
                     title: res.Metadata[i].title,
                     key: res.Metadata[i].key,
                     server: server,
-                    icon: `${server.protocol}://${server.host}:${server.port}${res.Metadata[i].thumb}?X-Plex-Token=${server.token}`,
+                    icon: plexArt(server, res.Metadata[i].thumb),
                     type: res.Metadata[i].type,
                     duration: res.Metadata[i].duration,
                     actualDuration: res.Metadata[i].duration,
@@ -135,10 +143,10 @@ module.exports = function ($http, $window, $interval) {
                     program.showTitle = res.Metadata[i].grandparentTitle
                     program.episode = res.Metadata[i].index
                     program.season = res.Metadata[i].parentIndex
-                    program.icon = `${server.protocol}://${server.host}:${server.port}${res.Metadata[i].grandparentThumb}?X-Plex-Token=${server.token}`
-                    program.episodeIcon = `${server.protocol}://${server.host}:${server.port}${res.Metadata[i].thumb}?X-Plex-Token=${server.token}`
-                    program.seasonIcon = `${server.protocol}://${server.host}:${server.port}${res.Metadata[i].parentThumb}?X-Plex-Token=${server.token}`
-                    program.showIcon = `${server.protocol}://${server.host}:${server.port}${res.Metadata[i].grandparentThumb}?X-Plex-Token=${server.token}`
+                    program.icon = plexArt(server, res.Metadata[i].grandparentThumb)
+                    program.episodeIcon = plexArt(server, res.Metadata[i].thumb)
+                    program.seasonIcon = plexArt(server, res.Metadata[i].parentThumb)
+                    program.showIcon = plexArt(server, res.Metadata[i].grandparentThumb)
                 }
                 else if (program.type === 'movie') {
                     program.showTitle = res.Metadata[i].title

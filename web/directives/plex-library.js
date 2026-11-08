@@ -40,18 +40,27 @@ module.exports = function (plex, pseudotv, $timeout) {
             })
 
             function updateLibrary(server) {
-                plex.getLibrary(server).then((lib) => {
-                    plex.getPlaylists(server).then((play) => {
-                        for (let i = 0, l = play.length; i < l; i++)
-                            play[i].type = 'playlist'
-                        scope.$apply(() => {
-                            scope.libraries = lib
-                            if (play.length > 0)
-                                scope.libraries.push({ title: "Playlists", key: "", icon: "", nested: play })
-                        })
+                scope.libraries = []
+                scope.loadError = null
+                scope.loadingLibrary = true
+                plex.getLibrary(server).then(async (libraries) => {
+                    let playlists = []
+                    try { playlists = await plex.getPlaylists(server) } catch (error) {
+                        // An unavailable playlist endpoint must not hide the libraries.
+                        console.warn('Plex playlists unavailable', error)
+                    }
+                    playlists.forEach(playlist => { playlist.type = 'playlist' })
+                    scope.$applyAsync(() => {
+                        scope.libraries = libraries
+                        if (playlists.length) scope.libraries.push({ title: 'Playlists', key: '', icon: '', nested: playlists })
+                        scope.loadingLibrary = false
                     })
-                }, (err) => {
-                    console.log(err)
+                }).catch(error => {
+                    console.error('Plex library unavailable', error)
+                    scope.$applyAsync(() => {
+                        scope.loadingLibrary = false
+                        scope.loadError = error && error.data && error.data.error || 'Αποτυχία φόρτωσης βιβλιοθηκών Plex.'
+                    })
                 })
             }
             scope.getNested = (list) => {

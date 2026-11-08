@@ -31,6 +31,9 @@
                     <select class="form-control form-control-sm" ng-model="plexServer"
                         ng-options="x.name for x in plexServers" ng-change="selectServer(plexServer)"></select>
                     <hr />
+                    <div ng-if="loadingLibrary" class="alert alert-info">Φόρτωση βιβλιοθηκών Plex…</div>
+                    <div ng-if="loadError" class="alert alert-danger">{{loadError}}</div>
+                    <div ng-if="!loadingLibrary && !loadError && (!libraries || libraries.length === 0)" class="alert alert-warning">Δεν βρέθηκαν βιβλιοθήκες ταινιών ή σειρών.</div>
                     <ul class="list-group list-group-root plex-panel" ng-init="setHeight = {'height': height + 'px'}" ng-style="setHeight" lazy-img-container>
                         <li class="list-group-item" ng-repeat="a in libraries">
                             <div class="{{ displayImages ? 'w_images' : 'wo_images' }}" ng-click="getNested(a);">
