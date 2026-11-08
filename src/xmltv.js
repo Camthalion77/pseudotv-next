@@ -1,4 +1,4 @@
-const XMLWriter = require('xml-writer')
+const XMLWriter = require('./xmlWriterCompat')
 const fs = require('fs')
 const helperFuncs = require('./helperFuncs')
 
@@ -32,7 +32,7 @@ function WriteXMLTV(channels, xmlSettings) {
         }
 
         _writeDocEnd(xw, ws)
-        ws.close()
+        ws.end()
     })
 }
 
@@ -64,6 +64,7 @@ function _writeChannels(xw, channels) {
 }
 
 function _writePrograms(xw, channel, date, cache) {
+    if (!Array.isArray(channel.programs) || channel.programs.length === 0) return
     let prog = helperFuncs.getCurrentProgramAndTimeElapsed(date, channel)
     let cutoff = new Date((date.valueOf() - prog.timeElapsed) + (cache * 60 * 60 * 1000))
     let temp = new Date(date.valueOf() - prog.timeElapsed)
