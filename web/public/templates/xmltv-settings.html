@@ -1,25 +1,12 @@
 <div>
-    <h5>XMLTV Settings
-        
-        <button class="pull-right btn btn-sm btn-success" style="margin-left: 5px;" ng-click="updateSettings(settings)">
-            Update
-        </button>
-        <button class="pull-right btn btn-sm btn-info" ng-click="resetSettings(settings)">
-            Reset Options
-        </button>
+    <h5>Ρυθμίσεις οδηγού προγράμματος (EPG)
+        <button class="pull-right btn btn-sm btn-success" ng-click="updateSettings(settings)">Αποθήκευση</button>
     </h5>
-    <h6>Output Path</h6>
-    <input type="text" class="form-control form-control-sm" ng-model="settings.file"/>
-    <br/>
+    <p>Τα στοιχεία προέρχονται από τον Plex. Ο οδηγός υποστηρίζει έως 31 ημέρες, ενώ συνιστώνται 14 ημέρες (336 ώρες).</p>
     <div class="row">
-        <div class="col-sm-6">
-            <label>EPG Cache (hours)</label>
-            <input type="number" class="form-control form-control-sm" ng-model="settings.cache"/>
-        </div>
-        <div class="col-sm-6">
-            <label>Refresh Timer (hours)</label>
-            <input type="number" class="form-control form-control-sm" ng-model="settings.refresh"/>
-        </div>
+        <div class="col-sm-6"><label>Διάρκεια οδηγού (ώρες)</label><input type="number" min="1" max="744" class="form-control form-control-sm" ng-model="settings.cache"/></div>
+        <div class="col-sm-6"><label>Ενημέρωση (ώρες)</label><input type="number" min="1" max="48" class="form-control form-control-sm" ng-model="settings.refresh"/></div>
     </div>
-    
+    <details style="margin-top:15px"><summary>Προχωρημένα</summary><label>Αρχείο XMLTV</label><input type="text" class="form-control form-control-sm" ng-model="settings.file"/></details>
+    <p style="margin-top:15px"><a href="/guide.html">Άνοιγμα οδηγού προγράμματος</a> · <a href="/api/xmltv.xml">Λήψη XMLTV</a></p>
 </div>

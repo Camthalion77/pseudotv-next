@@ -10,6 +10,7 @@ services:
       DATABASE: /data
       HDHR_DISCOVERY: "false"
       TZ: Europe/Athens
+      PUBLIC_BASE_URL: "http://192.168.10.250:8098"
     volumes:
       - ./pseudotv-next-data:/data
     restart: unless-stopped
