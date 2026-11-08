@@ -96,9 +96,10 @@
                             <div class="col-md-4">
                                 <label for="subtitleStream">Subtitle Track</label><br/>
                                 <select class="form-control form-control-sm" ng-model="program.opts.subtitleIndex">
-                                    <option value="-2">No Subtitles</option>
-                                    <option value="-1">Plex Default</option>
-                                    <option ng-repeat="x in program.streams" ng-if="x.streamType === 3" value="{{$index}}">{{x.displayTitle}}</option>
+                                    <option value="-2">Auto: DVB subtitles only (Greek first)</option>
+                                    <option value="-1">Auto: DVB subtitles only (Greek first)</option>
+                                    <option value="-3">No subtitles</option>
+                                    <option ng-repeat="x in program.streams" ng-if="x.streamType === 3" value="{{x.index}}">{{x.displayTitle}}</option>
                                 </select>
                             </div>
                         </div>

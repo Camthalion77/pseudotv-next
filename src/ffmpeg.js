@@ -30,6 +30,35 @@ class FFMPEG extends EventEmitter {
         return type === 1 ? '0:v:0' : '0:a:0?'
     }
 
+    // Only embedded DVB bitmap subtitles are safe to stream-copy to MPEG-TS.
+    // Legacy -2 and default -1 mean auto compatible; -3 means explicitly off.
+    selectCompatibleSubtitle(item, preference) {
+        if (String(preference) === '-3') return null
+        const streams = Array.isArray(item.streams) ? item.streams : []
+        const compatible = streams.filter(stream => {
+            const codec = String(stream.codec || stream.codecName || '').toLowerCase().trim().replace(/[\s-]/g, '_')
+            return Number(stream.streamType) === 3 && !stream.key && !stream.external &&
+                (codec === 'dvbsub' || codec === 'dvb_subtitle') &&
+                Number.isInteger(Number(stream.index)) && Number(stream.index) >= 0
+        })
+        const explicit = preference !== undefined && preference !== null &&
+            !['', '-1', '-2', '-3'].includes(String(preference))
+        const rank = stream => {
+            const lang = String(stream.language || stream.languageCode || '').toLowerCase()
+            if (['ell', 'gre', 'el'].includes(lang)) return 0
+            if (['eng', 'en'].includes(lang)) return 1
+            return 2
+        }
+        const chosen = explicit
+            ? compatible.find(stream => Number(stream.index) === Number(preference))
+            : compatible.slice().sort((a, b) => rank(a) - rank(b))[0]
+        if (!chosen) return null
+        const lang = String(chosen.language || chosen.languageCode || '').toLowerCase()
+        const language = ['ell','gre','el'].includes(lang) ? 'ell' :
+            ['eng','en'].includes(lang) ? 'eng' : 'und'
+        return { map: `0:${Number(chosen.index)}`, language }
+    }
+
     spawn(item) {
         if (this.stopped) return
         if (!item || typeof item.file !== 'string' || !item.file ||
@@ -43,13 +72,17 @@ class FFMPEG extends EventEmitter {
             return
         }
         const opts = item.opts || {}
+        const subtitle = this.selectCompatibleSubtitle(item, opts.subtitleIndex)
         const args = [
             '-hide_banner', '-nostdin', '-loglevel', 'error',
             '-ss', String(Number(item.start) / 1000), '-re', '-i', item.file,
             '-t', String(Number(item.duration) / 1000),
             '-map', this.selectTrack(item, 1, opts.videoIndex),
             '-map', this.selectTrack(item, 2, opts.audioIndex),
-            '-c:v', 'copy', '-c:a', 'copy', '-sn', '-dn',
+            '-c:v', 'copy', '-c:a', 'copy',
+            ...(subtitle ? ['-map', subtitle.map, '-c:s', 'copy',
+                '-metadata:s:s:0', `language=${subtitle.language}`] : ['-sn']),
+            '-dn',
             '-metadata', 'service_provider=PseudoTV Next',
             '-metadata', `service_name=${this.channel.name}`,
             '-mpegts_service_id', String(Math.max(1, Math.min(65535, Number(this.channel.number) || 1))),
