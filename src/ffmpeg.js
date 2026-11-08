@@ -17,7 +17,7 @@ class FFMPEG extends EventEmitter {
     selectTrack(item, type, preference) {
         const streams = Array.isArray(item.streams) ? item.streams : []
         const candidates = streams.map((stream, position) => ({ stream, position }))
-            .filter(({ stream }) => stream.streamType === type && Number.isInteger(Number(stream.index ?? 0)))
+            .filter(({ stream }) => stream.streamType === type)
         const selectedPosition = Number(preference)
         const preferred = preference !== undefined && preference !== null &&
             String(preference) !== '-1' && String(preference) !== '-2'
@@ -27,7 +27,7 @@ class FFMPEG extends EventEmitter {
         if (match) {
             // Plex stream.index is the absolute FFmpeg stream index when available.
             const index = Number(match.stream.index ?? match.position)
-            return `0:${index}`
+            if (Number.isInteger(index) && index >= 0) return `0:${index}`
         }
         return type === 1 ? '0:v:0' : '0:a:0?'
     }
@@ -52,6 +52,9 @@ class FFMPEG extends EventEmitter {
             '-sn', '-dn',
             '-metadata', 'service_provider=PseudoTV',
             '-metadata', `service_name=${this.channel.name}`,
+            // Reannounce programme tables and flag a new segment for MPEG-TS receivers.
+            '-mpegts_flags', '+resend_headers+initial_discontinuity',
+            '-mpegts_service_id', String(Math.max(1, Math.min(65535, Number(this.channel.number) || 1))),
             '-f', 'mpegts',
             '-output_ts_offset', String(this.offset),
             'pipe:1'
