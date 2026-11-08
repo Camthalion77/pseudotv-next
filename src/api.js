@@ -242,8 +242,9 @@ OUTPUTFILE`
 
     // XMLTV.XML Download
     router.get('/api/xmltv.xml', (req, res) => {
-        res.type('text')
+        res.type('application/xml; charset=utf-8')
         let xmltvSettings = db['xmltv-settings'].find()[0]
+        if (!fs.existsSync(xmltvSettings.file)) return res.status(503).send('XMLTV guide is not ready yet')
         res.send(fs.readFileSync(xmltvSettings.file))
     })
 

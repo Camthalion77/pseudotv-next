@@ -8,6 +8,8 @@ async function WriteXMLTV(channels, settings, baseUrl) {
     const hours = Math.min(24*31, Math.max(1, Number(settings.cache) || 336))
     const entries = generateSchedule(channels, now, hours)
     const content = xmltv(channels, entries, baseUrl)
+    const { validateGuide } = require('./epgValidate')
+    validateGuide(channels, entries, content)
     const file = settings.file
     fs.mkdirSync(path.dirname(file), {recursive:true})
     const tmp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`

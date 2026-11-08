@@ -40,6 +40,7 @@ function generateSchedule(channels, now = Date.now(), hours = 336, historyHours 
         const anchor = new Date(channel.startTime).getTime()
         if (!programs.length || !Number.isFinite(anchor) || !durations.every(d => Number.isFinite(d) && d > 0) || cycle <= 0) continue
         // Compute current cycle without iterating years of old broadcasts.
+        if (anchor >= high) continue
         let cycleStart = anchor + Math.max(0, Math.floor((low - anchor) / cycle)) * cycle
         let counter = 0
         while (cycleStart < high && counter < MAX_PROGRAMMES) {
@@ -84,13 +85,9 @@ function xmltv(channels, schedule, baseUrl = '') {
         out.push(tag('title', episode ? (p.showTitle || p.title) : p.title, ` lang="${lang}"`))
         if (episode) {
             out.push(tag('sub-title', p.title, ` lang="${lang}"`))
-            const season = Number(p.season), ep = Number(p.episode)
-            if (season > 0 && ep > 0) out.push(tag('episode-num', `${season-1}.${ep-1}.`, ' system="xmltv_ns"'))
         } else out.push(tag('sub-title', p.subtitle, ` lang="${lang}"`))
         out.push(tag('desc', p.summary, ` lang="${lang}"`))
-        if (p.originallyAvailableAt || p.year) out.push(tag('date', p.originallyAvailableAt || p.year))
-        if (p.actualDuration > 0) out.push(tag('length', Math.round(p.actualDuration / 60000), ' units="minutes"'))
-        for (const g of p.genres || []) out.push(tag('category', g, ` lang="${lang}"`))
+        // XMLTV DTD requires credits before date/category, and icon before episode-num/rating.
         const directors = p.directors || [], actors = p.actors || [], writers = p.writers || []
         if (directors.length || actors.length || writers.length) {
             out.push('<credits>')
@@ -99,9 +96,16 @@ function xmltv(channels, schedule, baseUrl = '') {
             for (const v of writers) out.push(tag('writer', v))
             out.push('</credits>')
         }
+        if (p.originallyAvailableAt || p.year) out.push(tag('date', p.originallyAvailableAt || p.year))
+        for (const g of p.genres || []) out.push(tag('category', g, ` lang="${lang}"`))
+        if (p.actualDuration > 0) out.push(tag('length', Math.round(p.actualDuration / 60000), ' units="minutes"'))
+        if (p.artworkId && baseUrl) out.push(`<icon src="${xmlEscape(`${baseUrl}/api/epg-image/${p.artworkId}`)}"/>`)
+        if (episode) {
+            const season = Number(p.season), ep = Number(p.episode)
+            if (season > 0 && ep > 0) out.push(tag('episode-num', `${season-1}.${ep-1}.`, ' system="xmltv_ns"'))
+        }
         if (p.rating) out.push(`<rating system="content">${tag('value', p.rating)}</rating>`)
         if (p.starRating != null && Number.isFinite(Number(p.starRating))) out.push(`<star-rating system="0-10">${tag('value', `${Math.max(0,Math.min(10,Number(p.starRating)))}/10`)}</star-rating>`)
-        if (p.artworkId && baseUrl) out.push(`<icon src="${xmlEscape(`${baseUrl}/api/epg-image/${p.artworkId}`)}"/>`)
         out.push('</programme>')
     }
     out.push('</tv>')
